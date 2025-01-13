@@ -1,39 +1,39 @@
 #include "ipc.h"
 
-int msg_id;
+struct PidStorage* pid_storage;
+int shm_id;
 
-// Funkcja obs³uguj¹ca komunikaty klientów
-void process_message(struct Message* message) {
-    printf("Obs³uga: Otrzymano komunikat: %s\n", message->text);
-
-    // Reakcja na treœæ komunikatu
-    if (strcmp(message->text, "zamówienie") == 0) {
-        printf("Obs³uga: Przyjêto zamówienie.\n");
-    }
-    else if (strcmp(message->text, "zap³aæ") == 0) {
-        printf("Obs³uga: Klient poprosi³ o rachunek.\n");
+void signal_handler(int signal) {
+    if (signal == SIGINT) {
+        printf("Obs³uga: Restauracja zamkniêta. Koñczê pracê.\n");
+        exit(0);
     }
     else {
-        printf("Obs³uga: Nieznane polecenie.\n");
+        printf("Obs³uga: Otrzymano sygna³ %d, ignorujê.\n", signal);
     }
 }
 
 int main() {
-    // Inicjalizacja kolejki komunikatów
-    msg_id = msgget(MSG_KEY, 0666 | IPC_CREAT);
-    if (msg_id == -1) {
-        perror("Obs³uga: B³¹d msgget");
+    shm_id = shmget(SHM_KEY, sizeof(struct PidStorage), 0666 | IPC_CREAT);
+    if (shm_id == -1) {
+        perror("Obs³uga: B³¹d shmget");
         exit(1);
     }
 
-    printf("Obs³uga: Rozpoczynam pracê.\n");
-    struct Message message;
+    pid_storage = shmat(shm_id, NULL, 0);
+    if (pid_storage == (void*)-1) {
+        perror("Obs³uga: B³¹d shmat");
+        exit(1);
+    }
+
+    pid_storage->obsluga_pid = getpid();
+    printf("Obs³uga: Mój PID to %d.\n", getpid());
+
+    signal(SIGUSR1, signal_handler);
+    signal(SIGUSR2, signal_handler);
+    signal(SIGINT, signal_handler);
 
     while (1) {
-        // Odbiór komunikatu (bez blokowania, oczekiwanie na nowe wiadomoœci)
-        if (msgrcv(msg_id, &message, sizeof(message.text), 0, IPC_NOWAIT) != -1) {
-            process_message(&message);
-        }
         sleep(1);
     }
 
