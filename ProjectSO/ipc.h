@@ -14,18 +14,9 @@
 #include <sys/wait.h>
 
 #define SHM_KEY 1234
-#define MSG_KEY 5678
-#define SEM_KEY 91011
-
 #define MAX_PLATES 10
-#define MAX_MESSAGE_SIZE 256
 #define MAX_PROCESSES 10
-
-// Struktura komunikatu
-struct Message {
-    long type;
-    char text[MAX_MESSAGE_SIZE];
-};
+#define MAX_TABLES 5
 
 // Struktura taœmy sushi
 struct ConveyorBelt {
@@ -41,6 +32,12 @@ struct PidStorage {
     pid_t obsluga_pid;
     pid_t klient_pids[MAX_PROCESSES];
     int klient_count;
+};
+
+// Struktura stolików
+struct Table {
+    int occupied;      // 0 - wolny, 1 - zajêty
+    pid_t client_pid;  // PID klienta, który zajmuje stolik
 };
 
 #endif
