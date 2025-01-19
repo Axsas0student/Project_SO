@@ -13,7 +13,7 @@
 #include <errno.h>
 #include <sys/wait.h>
 
-#define SHM_KEY 1234
+#define SHM_KEY 1235
 #define MAX_PLATES 10
 #define MAX_PROCESSES 10
 #define MAX_TABLES 5
