@@ -5,21 +5,52 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/shm.h>
-#include <time.h> // Dodano dla funkcji time()
+#include <sys/sem.h>
+#include <time.h>
+#include <errno.h>
 
 volatile sig_atomic_t* running;
 
+// Funkcja obs³uguj¹ca sygna³ SIGINT
 void signal_handler(int signal) {
     if (signal == SIGINT) {
-        *running = 0; // Ustaw flagê w pamiêci wspó³dzielonej
+        *running = 0;
         printf("\nProces nadrzêdny: Restauracja zamkniêta.\n");
     }
 }
 
-void client_process(int table_id, struct ConveyorBelt* belt, struct PidStorage* pid_storage, struct Table* tables) {
+// Funkcje semaforów z obs³ug¹ przerwañ (EINTR)
+int lock_semaphore(int sem_id) {
+    struct sembuf op = { 0, -1, 0 };
+    int res;
+    do {
+        res = semop(sem_id, &op, 1);
+    } while (res == -1 && errno == EINTR);
+    if (res == -1) {
+        perror("B³¹d semop (lock)");
+        exit(1);
+    }
+    return res;
+}
+
+int unlock_semaphore(int sem_id) {
+    struct sembuf op = { 0, 1, 0 };
+    int res;
+    do {
+        res = semop(sem_id, &op, 1);
+    } while (res == -1 && errno == EINTR);
+    if (res == -1) {
+        perror("B³¹d semop (unlock)");
+        exit(1);
+    }
+    return res;
+}
+
+// Funkcja wykonuj¹ca kod dla procesu klienta
+void client_process(int table_id, struct ConveyorBelt* belt, struct PidStorage* pid_storage, struct Table* tables, int sem_id) {
     printf("Klient (PID %d): Siedzê przy stoliku %d.\n", getpid(), table_id);
 
-    int time_to_stay = 10 + rand() % 11; // Klient zostaje od 10 do 20 sekund
+    int time_to_stay = 10 + rand() % 11;
     while (*running && time_to_stay > 0) {
         sleep(1);
         time_to_stay--;
@@ -30,7 +61,9 @@ void client_process(int table_id, struct ConveyorBelt* belt, struct PidStorage* 
         }
 
         if (belt->count > 0) {
+            lock_semaphore(sem_id);
             belt->count--;
+            unlock_semaphore(sem_id);
             printf("Klient (PID %d): Zabra³em talerz. Pozosta³o %d talerzy.\n", getpid(), belt->count);
         }
         else {
@@ -38,32 +71,37 @@ void client_process(int table_id, struct ConveyorBelt* belt, struct PidStorage* 
         }
     }
 
+    lock_semaphore(sem_id);
     tables[table_id].occupied = 0;
     tables[table_id].client_pid = 0;
 
-    for (int i = 0; i < MAX_PROCESSES; i++) {
+    for (int i = 0; i < pid_storage->klient_count; i++) {
         if (pid_storage->klient_pids[i] == getpid()) {
-            pid_storage->klient_pids[i] = 0;
+            pid_storage->klient_pids[i] = pid_storage->klient_pids[pid_storage->klient_count - 1];
+            pid_storage->klient_pids[pid_storage->klient_count - 1] = 0;
+            pid_storage->klient_count--;
             break;
         }
     }
+    unlock_semaphore(sem_id);
 
     shmdt(belt);
     shmdt(pid_storage);
     shmdt(tables);
-    shmdt((void*)running); // Konwersja do void* usuwaj¹ca ostrze¿enie
+    shmdt((void*)running);
 
     printf("Klient (PID %d): Opuszczam restauracjê.\n", getpid());
     exit(0);
 }
 
+// Funkcja do znalezienia wolnego stolika
 int find_free_table(struct Table* tables) {
     for (int i = 0; i < MAX_PROCESSES; i++) {
         if (!tables[i].occupied) {
             return i;
         }
     }
-    return -1; // Brak wolnych stolików
+    return -1;
 }
 
 int main() {
@@ -114,10 +152,19 @@ int main() {
     }
     *running = 1;
 
+    int sem_id = semget(SHM_KEY + 4, 1, 0666 | IPC_CREAT);
+    if (sem_id == -1) {
+        perror("B³¹d semget");
+        exit(1);
+    }
+    if (semctl(sem_id, 0, SETVAL, 1) == -1) {
+        perror("B³¹d semctl");
+        exit(1);
+    }
+
     signal(SIGINT, signal_handler);
 
     belt->count = 0;
-    belt->start = 0;
     pid_storage->klient_count = 0;
     for (int i = 0; i < MAX_PROCESSES; i++) {
         pid_storage->klient_pids[i] = 0;
@@ -128,7 +175,10 @@ int main() {
     printf("Proces nadrzêdny: Restauracja otwarta.\n");
 
     while (*running) {
+        lock_semaphore(sem_id);
         int table_id = find_free_table(tables);
+        unlock_semaphore(sem_id);
+
         if (table_id == -1) {
             printf("Brak wolnych stolików, klient czeka.\n");
             sleep(1);
@@ -137,10 +187,12 @@ int main() {
 
         pid_t pid = fork();
         if (pid == 0) {
+            lock_semaphore(sem_id);
             tables[table_id].occupied = 1;
             tables[table_id].client_pid = getpid();
             pid_storage->klient_pids[pid_storage->klient_count++] = getpid();
-            client_process(table_id, belt, pid_storage, tables);
+            unlock_semaphore(sem_id);
+            client_process(table_id, belt, pid_storage, tables, sem_id);
         }
         else if (pid < 0) {
             perror("B³¹d fork");
@@ -165,6 +217,8 @@ int main() {
     shmctl(shm_belt_id, IPC_RMID, NULL);
     shmctl(shm_table_id, IPC_RMID, NULL);
     shmctl(shm_flag_id, IPC_RMID, NULL);
+
+    semctl(sem_id, 0, IPC_RMID);
 
     printf("Proces nadrzêdny: Restauracja zamkniêta.\n");
     return 0;
