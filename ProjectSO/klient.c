@@ -7,15 +7,21 @@
 #include <sys/shm.h>
 #include <sys/sem.h>
 #include <time.h>
+#include <limits.h>
 #include <errno.h>
 
+#define MAX_CLIENTS 100
+
 volatile sig_atomic_t* running;
+
+// Deklaracja funkcji find_table_for_group
+int find_table_for_group(struct Table* tables, int group_size);
 
 // Funkcja obs³uguj¹ca sygna³ SIGINT
 void signal_handler(int signal) {
     if (signal == SIGINT) {
-        *running = 0;
-        printf("\nProces nadrzêdny: Restauracja zamkniêta.\n");
+        *running = 0; // Ustawienie flagi na 0 w pamiêci wspó³dzielonej
+        printf("\nProces (PID %d): Otrzymano sygna³ zamkniêcia restauracji (SIGINT).\n", getpid());
     }
 }
 
@@ -46,66 +52,83 @@ int unlock_semaphore(int sem_id) {
     return res;
 }
 
+// Funkcja losuj¹ca rozmiar grupy
+int random_group_size() {
+    int r = rand() % 100;
+    if (r < 40) return 1;
+    else if (r < 70) return 2;
+    else if (r < 90) return 3;
+    else return 4;
+}
+
 // Funkcja wykonuj¹ca kod dla procesu klienta
-void client_process(int table_id, struct ConveyorBelt* belt, struct PidStorage* pid_storage, struct Table* tables, int sem_id) {
-    printf("Klient (PID %d): Siedzê przy stoliku %d.\n", getpid(), table_id);
+void client_process(int table_id, int group_size, struct ConveyorBelt* belt, struct PidStorage* pid_storage, struct Table* tables, int sem_id) {
+    signal(SIGINT, signal_handler); // Rejestracja obs³ugi sygna³u SIGINT w procesie potomnym
+
+    printf("Grupa %d (PID %d): Siedzimy przy stoliku %d (rozmiar stolika: %d).\n", group_size, getpid(), table_id, tables[table_id].size);
 
     int time_to_stay = 10 + rand() % 11;
-    while (*running && time_to_stay > 0) {
-        sleep(1);
-        time_to_stay--;
+    int max_wait_time = 5;  // Maksymalny czas oczekiwania w sekundach
+    int waited_time = 0;
 
-        if (!*running) {
-            printf("Klient (PID %d): Restauracja zamkniêta. Opuszczam stolik %d.\n", getpid(), table_id);
+    while (*running && time_to_stay > 0) {
+        lock_semaphore(sem_id);
+        if (belt->count > 0) {
+            belt->count--;
+            printf("Grupa %d (PID %d): Zabraliœmy talerz. Pozosta³o %d talerzy.\n", group_size, getpid(), belt->count);
+            waited_time = 0; // Zresetuj czas oczekiwania, jeœli uda³o siê zabraæ talerz
+        }
+        else {
+            printf("Grupa %d (PID %d): Taœma jest pusta. Czekamy...\n", group_size, getpid());
+            waited_time++;
+        }
+        unlock_semaphore(sem_id);
+
+        if (waited_time >= max_wait_time) {
+            printf("Grupa %d (PID %d): Zbyt d³ugo czekaliœmy. Opuszczamy restauracjê.\n", group_size, getpid());
             break;
         }
 
-        if (belt->count > 0) {
-            lock_semaphore(sem_id);
-            belt->count--;
-            unlock_semaphore(sem_id);
-            printf("Klient (PID %d): Zabra³em talerz. Pozosta³o %d talerzy.\n", getpid(), belt->count);
-        }
-        else {
-            printf("Klient (PID %d): Taœma jest pusta. Czekam...\n", getpid());
-        }
+        sleep(1);
+        time_to_stay--;
     }
 
     lock_semaphore(sem_id);
     tables[table_id].occupied = 0;
     tables[table_id].client_pid = 0;
 
+    // Usuñ PID procesu z listy klientów
     for (int i = 0; i < pid_storage->klient_count; i++) {
         if (pid_storage->klient_pids[i] == getpid()) {
             pid_storage->klient_pids[i] = pid_storage->klient_pids[pid_storage->klient_count - 1];
-            pid_storage->klient_pids[pid_storage->klient_count - 1] = 0;
             pid_storage->klient_count--;
             break;
         }
     }
     unlock_semaphore(sem_id);
 
-    shmdt(belt);
-    shmdt(pid_storage);
-    shmdt(tables);
-    shmdt((void*)running);
-
-    printf("Klient (PID %d): Opuszczam restauracjê.\n", getpid());
+    printf("Grupa %d (PID %d): Opuszczamy restauracjê.\n", group_size, getpid());
     exit(0);
 }
 
-// Funkcja do znalezienia wolnego stolika
-int find_free_table(struct Table* tables) {
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-        if (!tables[i].occupied) {
-            return i;
+// Funkcja do znalezienia odpowiedniego stolika dla grupy
+int find_table_for_group(struct Table* tables, int group_size) {
+    int best_table = -1;
+    int best_size = INT_MAX;
+
+    for (int i = 0; i < MAX_TABLES; i++) {
+        if (!tables[i].occupied && tables[i].size >= group_size && tables[i].size < best_size) {
+            best_table = i;
+            best_size = tables[i].size;
         }
     }
-    return -1;
+    return best_table; // Zwraca najlepszy stolik lub -1, jeœli brak
 }
 
 int main() {
     srand(time(NULL));
+
+    signal(SIGINT, signal_handler); // Rejestracja obs³ugi sygna³u SIGINT
 
     int shm_id = shmget(SHM_KEY, sizeof(struct PidStorage), 0666 | IPC_CREAT);
     if (shm_id == -1) {
@@ -129,7 +152,7 @@ int main() {
         exit(1);
     }
 
-    int shm_table_id = shmget(SHM_KEY + 2, sizeof(struct Table) * MAX_PROCESSES, 0666 | IPC_CREAT);
+    int shm_table_id = shmget(SHM_KEY + 2, sizeof(struct Table) * MAX_TABLES, 0666 | IPC_CREAT);
     if (shm_table_id == -1) {
         perror("B³¹d shmget dla stolików");
         exit(1);
@@ -162,43 +185,66 @@ int main() {
         exit(1);
     }
 
-    signal(SIGINT, signal_handler);
-
     belt->count = 0;
     pid_storage->klient_count = 0;
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-        pid_storage->klient_pids[i] = 0;
+
+    for (int i = 0; i < MAX_TABLES; i++) {
         tables[i].occupied = 0;
         tables[i].client_pid = 0;
+        tables[i].size = (i < 2) ? 4 : (i < 5) ? 3 : (i < 9) ? 2 : 1;
     }
 
     printf("Proces nadrzêdny: Restauracja otwarta.\n");
 
     while (*running) {
+        int group_size = random_group_size();
+
         lock_semaphore(sem_id);
-        int table_id = find_free_table(tables);
+        int table_id = find_table_for_group(tables, group_size);
         unlock_semaphore(sem_id);
 
+        if (!*running) break;
+
         if (table_id == -1) {
-            printf("Brak wolnych stolików, klient czeka.\n");
+            printf("Brak wolnych stolików, grupa %d oczekuje.\n", group_size);
             sleep(1);
             continue;
         }
 
+        if (pid_storage->klient_count >= MAX_CLIENTS) {
+            printf("Osi¹gniêto maksymaln¹ liczbê klientów. Restauracja zostaje zamkniêta.\n");
+            *running = 0; // Ustaw flagê zamkniêcia restauracji
+            break;        // Przerwij g³ówn¹ pêtlê
+        }
+
         pid_t pid = fork();
         if (pid == 0) {
+            signal(SIGINT, signal_handler);
             lock_semaphore(sem_id);
             tables[table_id].occupied = 1;
             tables[table_id].client_pid = getpid();
-            pid_storage->klient_pids[pid_storage->klient_count++] = getpid();
             unlock_semaphore(sem_id);
-            client_process(table_id, belt, pid_storage, tables, sem_id);
+            client_process(table_id, group_size, belt, pid_storage, tables, sem_id);
         }
         else if (pid < 0) {
             perror("B³¹d fork");
         }
+        else {
+            lock_semaphore(sem_id);
+            pid_storage->klient_pids[pid_storage->klient_count++] = pid;
+            unlock_semaphore(sem_id);
+            printf("Grupa %d osób (PID %d): Przydzielono stolik %d (rozmiar stolika: %d).\n", group_size, pid, table_id, tables[table_id].size);
+        }
 
         sleep(1);
+        int delay = 500000 + rand() % 1000000; // OpóŸnienie od 5s do 1.5s
+        usleep(delay);
+    }
+
+    for (int i = 0; i < pid_storage->klient_count; i++) {
+        if (pid_storage->klient_pids[i] != 0) {
+            kill(pid_storage->klient_pids[i], SIGINT);
+        }
     }
 
     printf("Proces nadrzêdny: Czekam na zakoñczenie klientów...\n");
@@ -208,10 +254,10 @@ int main() {
         }
     }
 
-    shmdt(belt);
-    shmdt(pid_storage);
-    shmdt(tables);
-    shmdt((void*)running);
+    if (shmdt(belt) == -1) perror("B³¹d shmdt (belt)");
+    if (shmdt(pid_storage) == -1) perror("B³¹d shmdt (pid_storage)");
+    if (shmdt(tables) == -1) perror("B³¹d shmdt (tables)");
+    if (shmdt((void*)running) == -1) perror("B³¹d shmdt (running)");
 
     shmctl(shm_id, IPC_RMID, NULL);
     shmctl(shm_belt_id, IPC_RMID, NULL);

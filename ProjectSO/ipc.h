@@ -15,9 +15,9 @@
 
 #define SHM_KEY 1235678
 #define SEM_KEY 1235679
-#define MAX_PLATES 10
+#define MAX_PLATES 14
 #define MAX_PROCESSES 10
-#define MAX_TABLES 5
+#define MAX_TABLES 14
 
 // Struktura taœmy sushi
 struct ConveyorBelt {
@@ -39,6 +39,7 @@ struct PidStorage {
 struct Table {
     int occupied;      // 0 - wolny, 1 - zajêty
     pid_t client_pid;  // PID klienta, który zajmuje stolik
+    int size;
 };
 
 #endif
