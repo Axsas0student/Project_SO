@@ -40,6 +40,7 @@ struct Table {
     int occupied;      // 0 - wolny, 1 - zajêty
     pid_t client_pid;  // PID klienta, który zajmuje stolik
     int size;
+    int special_order; // 0 - brak zamówienia, 4/5/6 - typ zamówienia
 };
 
 #endif
