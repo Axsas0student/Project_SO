@@ -1,22 +1,29 @@
+#define _POSIX_C_SOURCE 200809L
 #include "ipc.h"
-#include <sys/wait.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <signal.h>
+#include <sys/wait.h>
 #include <sys/shm.h>
 #include <sys/sem.h>
 #include <time.h>
-#include <limits.h>
+#include <string.h>
+#include <limits.h> // Dla INT_MAX
 #include <errno.h>
 
 volatile sig_atomic_t* running;
+
+// Handler dla SIGCHLD - usuwa zombie procesy
+void sigchld_handler(int sig) {
+    while (waitpid(-1, NULL, WNOHANG) > 0);
+}
 
 // Obs³uga sygna³u SIGINT (zamkniêcie restauracji)
 void signal_handler(int signal) {
     if (signal == SIGINT) {
         *running = 0; // Flaga ustawiana na 0
-        printf("Proces (PID %d): Otrzymano sygna³ zamkniêcia restauracji (SIGINT).\n", getpid());
+        printf("Proces nadrzêdny: Otrzymano sygna³ zamkniêcia restauracji (SIGINT).\n");
     }
 }
 
@@ -90,6 +97,7 @@ void unregister_client_pid(struct PidStorage* pid_storage, int sem_id) {
     unlock_semaphore(sem_id);
 }
 
+// Funkcja obs³uguj¹ca proces klienta
 void client_process(int table_id, int group_size, struct ConveyorBelt* belt, struct Table* tables, struct PidStorage* pid_storage, int sem_id) {
     signal(SIGINT, signal_handler); // Rejestracja obs³ugi sygna³u SIGINT
 
@@ -118,7 +126,6 @@ void client_process(int table_id, int group_size, struct ConveyorBelt* belt, str
 
         unlock_semaphore(sem_id);
 
-        // SprawdŸ, czy sygna³ zamkniêcia zosta³ otrzymany
         if (!*running) {
             printf("Grupa %d (PID %d): Otrzymano sygna³ zamkniêcia restauracji. Opuszczamy lokal.\n", group_size, getpid());
             break;
@@ -153,6 +160,14 @@ void client_process(int table_id, int group_size, struct ConveyorBelt* belt, str
 int main() {
     srand(time(NULL));
 
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sigchld_handler;
+    sigaction(SIGCHLD, &sa, NULL);
+
+    signal(SIGINT, signal_handler);
+
+    // Tworzenie pamiêci wspó³dzielonej
     int shm_id = shmget(SHM_KEY, sizeof(struct PidStorage), 0666 | IPC_CREAT);
     struct PidStorage* pid_storage = shmat(shm_id, NULL, 0);
 
@@ -166,6 +181,7 @@ int main() {
     running = shmat(shm_flag_id, NULL, 0);
     *running = 1;
 
+    // Tworzenie semafora
     int sem_id = semget(SEM_KEY, 1, 0666 | IPC_CREAT);
     semctl(sem_id, 0, SETVAL, 1);
 
@@ -176,8 +192,6 @@ int main() {
         tables[i].size = (i < 2) ? 4 : (i < 5) ? 3 : (i < 9) ? 2 : 1;
         tables[i].special_order = 0;
     }
-
-    signal(SIGINT, signal_handler); // Rejestracja obs³ugi sygna³u SIGINT
 
     while (*running) {
         int group_size = (rand() % 4) + 1;
@@ -201,7 +215,33 @@ int main() {
         }
     }
 
-    printf("Proces nadrzêdny: Restauracja zamkniêta.\n");
+    printf("Proces nadrzêdny: Zamykam restauracjê. Czekam na zakoñczenie procesów klientów...\n");
+
+    // Wysy³anie sygna³u zamkniêcia do wszystkich klientów
+    for (int i = 0; i < pid_storage->klient_count; i++) {
+        if (pid_storage->klient_pids[i] > 0) {
+            kill(pid_storage->klient_pids[i], SIGINT);
+        }
+    }
+
+    // Oczekiwanie na zakoñczenie wszystkich procesów klientów
+    while (wait(NULL) > 0);
+
+    // Usuwanie pamiêci wspó³dzielonej
+    if (shmdt(pid_storage) == -1) perror("B³¹d od³¹czania pamiêci (pid_storage)");
+    if (shmdt(belt) == -1) perror("B³¹d od³¹czania pamiêci (belt)");
+    if (shmdt(tables) == -1) perror("B³¹d od³¹czania pamiêci (tables)");
+    if (shmdt(running) == -1) perror("B³¹d od³¹czania pamiêci (running)");
+
+    shmctl(shm_id, IPC_RMID, NULL);
+    shmctl(shm_belt_id, IPC_RMID, NULL);
+    shmctl(shm_table_id, IPC_RMID, NULL);
+    shmctl(shm_flag_id, IPC_RMID, NULL);
+
+    // Usuwanie semafora
+    semctl(sem_id, 0, IPC_RMID);
+
+    printf("Proces nadrzêdny: Restauracja zamkniêta. Wszystkie zasoby zosta³y zwolnione.\n");
 
     return 0;
 }
