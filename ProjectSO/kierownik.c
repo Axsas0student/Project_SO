@@ -46,7 +46,13 @@ int main() {
         printf("4 - Wyjœcie\n");
 
         int choice;
-        scanf("%d", &choice);
+        printf("Wybierz opcjê: ");
+        if (scanf("%d", &choice) != 1) {
+            // Obs³uga b³êdnego wejœcia
+            printf("B³êdna opcja. WprowadŸ liczbê od 1 do 4.\n");
+            while (getchar() != '\n'); // Oczyszczanie bufora wejœciowego
+            continue;
+        }
 
         switch (choice) {
         case 1:
@@ -62,6 +68,8 @@ int main() {
             shmctl(shm_id, IPC_RMID, NULL);
             printf("Kierownik: Koñczê pracê.\n");
             return 0;
+        default:
+            printf("B³êdna opcja. WprowadŸ liczbê od 1 do 4.\n");
         }
     }
 

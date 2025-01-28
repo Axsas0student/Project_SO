@@ -17,15 +17,15 @@
 #define SEM_KEY 1235679
 #define MSG_KEY 1235680
 #define MAX_PLATES 14
-#define MAX_PROCESSES 10
+#define MAX_PROCESSES 15
 #define MAX_TABLES 14
 
 // Struktura taœmy sushi
 struct ConveyorBelt {
-    int plates[MAX_PLATES];
-    int start;
+    int plates[MAX_PLATES];     //typy talerzy
+    int start;                  //pocz¹tek i koniec w buforze
     int end;
-    int count;
+    int count;                  //liczba talerzy na taœmie
 };
 
 // Struktura przechowuj¹ca PID-y procesów
@@ -33,15 +33,15 @@ struct PidStorage {
     pid_t kucharz_pid;
     pid_t obsluga_pid;
     pid_t klient_pids[MAX_PROCESSES];
-    int klient_count;
+    int klient_count;           //l aktywnych klientów
 };
 
 // Struktura stolików
 struct Table {
     int occupied;      // 0 - wolny, 1 - zajêty
     pid_t client_pid;  // PID klienta, który zajmuje stolik
-    int size;
-    int special_order;
+    int size;           //rozmiar sotlika
+    int special_order;  //zamowienie specjalne
 };
 
 struct Msg {

@@ -39,7 +39,7 @@ void send_partial_bill(int msg_id, int* plate_count) {
     struct Msg msg = { 1, getpid(), {0} };
     memcpy(msg.plates, plate_count, sizeof(int) * 6);
     msgsnd(msg_id, &msg, sizeof(msg) - sizeof(long), 0);
-    printf("Grupa %d: Wys³aliœmy czêœciowy rachunek do obs³ugi.\n", getpid());
+    printf("Grupa %d: Wys³aliœmy rachunek do obs³ugi.\n", getpid());
 }
 
 int find_table_for_group(struct Table* tables, int group_size, int sem_id) {
