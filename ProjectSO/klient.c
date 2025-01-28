@@ -120,7 +120,9 @@ void client_process(int table_id, int group_size, struct ConveyorBelt* belt, str
             int special_order = 4 + rand() % 3;
             printf("Grupa %d: Sk³adamy zamówienie specjalne na talerz %d.\n", getpid(), special_order);
             lock_semaphore(sem_id);
-            tables[table_id].special_order = special_order;
+            if (*running) {
+                tables[table_id].special_order = special_order;
+            }
             unlock_semaphore(sem_id);
             waited_time = 0;
         }
@@ -181,6 +183,10 @@ int main() {
 
     while (*running) {
         int group_size = (rand() % 4) + 1;
+        if (pid_storage->klient_count >= MAX_PROCESSES) {
+            printf("Limit klientów osi¹gniêty. Nowa grupa nie zostanie obs³u¿ona.\n");
+            continue;
+        }
 
         int table_id = find_table_for_group(tables, group_size, sem_id);
 
