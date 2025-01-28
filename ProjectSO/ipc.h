@@ -15,6 +15,7 @@
 
 #define SHM_KEY 1235678
 #define SEM_KEY 1235679
+#define MSG_KEY 1235680
 #define MAX_PLATES 14
 #define MAX_PROCESSES 10
 #define MAX_TABLES 14
@@ -40,7 +41,13 @@ struct Table {
     int occupied;      // 0 - wolny, 1 - zajêty
     pid_t client_pid;  // PID klienta, który zajmuje stolik
     int size;
-    int special_order; // 0 - brak zamówienia, 4/5/6 - typ zamówienia
+    int special_order;
+};
+
+struct Msg {
+    long mtype;          // Typ wiadomoœci (PID klienta lub 1 dla obs³ugi)
+    int group_id;        // ID grupy (PID klienta)
+    int plates[6];       // Liczba zjedzonych talerzyków wed³ug rodzaju
 };
 
 #endif
